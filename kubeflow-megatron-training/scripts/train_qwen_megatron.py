@@ -75,7 +75,8 @@ def main():
         "--save", args.output_dir,
         "--tensorboard-dir", rt.get("tensorboard_dir", os.path.join(args.output_dir, "tb")),
         "--bf16" if model.get("bf16", False) else "",
-        "--fp8" if model.get("fp8", False) else "",
+        # FP8은 환경 준비 완료 후에만 켜세요(TE/APEX 호환성 필요).
+        # "--fp8" if model.get("fp8", False) else "",
         "--data-path", os.path.join(data["dataset_dir"], "megatron_text_document")  # Megatron 포맷 가정
     ]
     # 빈 문자열 제거

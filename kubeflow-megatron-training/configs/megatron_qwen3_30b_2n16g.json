@@ -1,5 +1,5 @@
 {
-  "description_ko": "Qwen3-30B FP8를 Megatron-LM v0.12로 2노드(각 8GPU)에서 학습하기 위한 예시 설정",
+  "description_ko": "Qwen3-30B를 Megatron-LM v0.12로 2노드(각 8GPU)에서 학습하기 위한 예시 설정 (기본 BF16, FP8은 환경 준비 후 true로 변경)",
   "data": {
     "dataset_dir": "/mnt/datasets/processed",
     "num_workers": 4,
@@ -17,7 +17,7 @@
     "vocab_size": 152064,
     "apply_qkv_layer_scaling": true,
     "activation": "gelu",
-    "fp8": true,
+    "fp8": false,
     "bf16": true
   },
   "parallelism": {
