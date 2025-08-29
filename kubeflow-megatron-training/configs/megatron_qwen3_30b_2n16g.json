@@ -1,0 +1,43 @@
+{
+  "description_ko": "Qwen3-30B FP8를 Megatron-LM v0.12로 2노드(각 8GPU)에서 학습하기 위한 예시 설정",
+  "data": {
+    "dataset_dir": "/mnt/datasets/processed",
+    "num_workers": 4,
+    "seq_length": 4096,
+    "micro_batch_size": 1,
+    "global_batch_size": 128
+  },
+  "model": {
+    "model_name_or_path": "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8",
+    "hidden_size": 7168,
+    "num_layers": 60,
+    "num_attention_heads": 56,
+    "kv_channels": 128,
+    "ffn_hidden_size": 18944,
+    "vocab_size": 152064,
+    "apply_qkv_layer_scaling": true,
+    "activation": "gelu",
+    "fp8": true,
+    "bf16": true
+  },
+  "parallelism": {
+    "tensor_model_parallel_size": 8,
+    "pipeline_model_parallel_size": 2,
+    "data_parallel_groups": 1,
+    "sequence_parallel": true
+  },
+  "runtime": {
+    "lr": 1e-4,
+    "min_lr": 1e-5,
+    "weight_decay": 0.01,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.95,
+    "adam_eps": 1e-8,
+    "lr_warmup_steps": 1000,
+    "train_iters": 10000,
+    "save_interval": 1000,
+    "log_interval": 10,
+    "tensorboard_dir": "/mnt/checkpoints/tb"
+  }
+}
+

@@ -1,0 +1,165 @@
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: megatron-qwen3-30b-train
+  labels:
+    app: megatron-training
+spec:
+  runPolicy:
+    cleanPodPolicy: None
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            role: master
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: amd64
+            nvidia.com/gpu.product: NVIDIA-H100
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: nvidia.com/gpu.product
+                        operator: In
+                        values: ["NVIDIA-H100"]
+          containers:
+            - name: megatron
+              image: <your-registry>/megatron-qwen:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-lc"]
+              args:
+                - >-
+                  torchrun --nproc_per_node=8 --nnodes=2 --rdzv_backend=c10d
+                  --rdzv_endpoint=$(PYTORCH_JOB_MASTER_SERVICE_HOST):29400
+                  /workspace/scripts/train_qwen_megatron.py
+                  --config /workspace/configs/megatron_qwen3_30b_2n16g.json
+                  --output_dir /mnt/checkpoints/qwen3-30b-megatron
+              env:
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom: { secretKeyRef: { name: hf-token, key: HUGGING_FACE_HUB_TOKEN } }
+                - name: NCCL_DEBUG
+                  value: WARN
+                - name: NCCL_IB_DISABLE
+                  value: "0"
+                - name: NCCL_P2P_DISABLE
+                  value: "0"
+                - name: LANGFUSE_PUBLIC_KEY
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_PUBLIC_KEY } }
+                - name: LANGFUSE_SECRET_KEY
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_SECRET_KEY } }
+                - name: LANGFUSE_HOST
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_HOST } }
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  cpu: "16"
+                  memory: 128Gi
+                requests:
+                  nvidia.com/gpu: 8
+                  cpu: "8"
+                  memory: 96Gi
+              volumeMounts:
+                - name: datasets
+                  mountPath: /mnt/datasets
+                - name: checkpoints
+                  mountPath: /mnt/checkpoints
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: datasets
+              persistentVolumeClaim:
+                claimName: llm-datasets-pvc
+            - name: checkpoints
+              persistentVolumeClaim:
+                claimName: llm-checkpoints-pvc
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 64Gi
+    Worker:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            role: worker
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: amd64
+            nvidia.com/gpu.product: NVIDIA-H100
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: nvidia.com/gpu.product
+                        operator: In
+                        values: ["NVIDIA-H100"]
+          containers:
+            - name: megatron
+              image: <your-registry>/megatron-qwen:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-lc"]
+              args:
+                - >-
+                  torchrun --nproc_per_node=8 --nnodes=2 --rdzv_backend=c10d
+                  --rdzv_endpoint=$(PYTORCH_JOB_MASTER_SERVICE_HOST):29400
+                  /workspace/scripts/train_qwen_megatron.py
+                  --config /workspace/configs/megatron_qwen3_30b_2n16g.json
+                  --output_dir /mnt/checkpoints/qwen3-30b-megatron
+              env:
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom: { secretKeyRef: { name: hf-token, key: HUGGING_FACE_HUB_TOKEN } }
+                - name: NCCL_DEBUG
+                  value: WARN
+                - name: NCCL_IB_DISABLE
+                  value: "0"
+                - name: NCCL_P2P_DISABLE
+                  value: "0"
+                - name: LANGFUSE_PUBLIC_KEY
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_PUBLIC_KEY } }
+                - name: LANGFUSE_SECRET_KEY
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_SECRET_KEY } }
+                - name: LANGFUSE_HOST
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_HOST } }
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  cpu: "16"
+                  memory: 128Gi
+                requests:
+                  nvidia.com/gpu: 8
+                  cpu: "8"
+                  memory: 96Gi
+              volumeMounts:
+                - name: datasets
+                  mountPath: /mnt/datasets
+                - name: checkpoints
+                  mountPath: /mnt/checkpoints
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: datasets
+              persistentVolumeClaim:
+                claimName: llm-datasets-pvc
+            - name: checkpoints
+              persistentVolumeClaim:
+                claimName: llm-checkpoints-pvc
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 64Gi
+
