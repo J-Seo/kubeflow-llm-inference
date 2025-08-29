@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: langfuse-postgres-pvc
+  labels:
+    app.kubernetes.io/name: langfuse-postgres
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 200Gi
+  storageClassName: gp2 # replace with your storage class
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-postgres
+  labels:
+    app: langfuse-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse-postgres
+  template:
+    metadata:
+      labels:
+        app: langfuse-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: langfuse-secrets
+          env:
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: langfuse-secrets, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: langfuse-secrets, key: POSTGRES_PASSWORD } }
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: langfuse-secrets, key: POSTGRES_DB } }
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: langfuse-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-postgres
+spec:
+  selector:
+    app: langfuse-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
+

@@ -1,0 +1,84 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: tgi-qwen3-30b-fp8
+  labels:
+    app: tgi-qwen3-30b-fp8
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  predictor:
+    containers:
+      - name: tgi
+        image: ghcr.io/huggingface/text-generation-inference:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+        env:
+          - name: HUGGING_FACE_HUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HUGGING_FACE_HUB_TOKEN
+        args:
+          - "--model-id=Qwen/Qwen3-30B-A3B-Thinking-2507-FP8"
+          - "--num-shard=8"
+          - "--max-input-tokens=4096"
+          - "--max-total-tokens=32768"
+          - "--dtype=float16" # TGI may not support FP8 runtime; it will dequantize
+          - "--cuda-memory-fraction=0.92"
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+            cpu: "16"
+            memory: 96Gi
+          requests:
+            nvidia.com/gpu: 8
+            cpu: "8"
+            memory: 64Gi
+        volumeMounts:
+          - name: hf-cache
+            mountPath: /data
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+    minReplicas: 2
+    maxReplicas: 2
+    nodeSelector:
+      kubernetes.io/arch: amd64
+      nvidia.com/gpu.product: NVIDIA-H100
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: nvidia.com/gpu.product
+                  operator: In
+                  values: ["NVIDIA-H100"]
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: ["tgi-qwen3-30b-fp8"]
+              topologyKey: kubernetes.io/hostname
+    timeout: 600
+    volumes:
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: hf-model-cache
+

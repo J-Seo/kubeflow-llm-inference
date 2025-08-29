@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-ray-qwen3-30b-fp8
+  labels:
+    app: vllm-ray-qwen3-30b-fp8
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-ray-qwen3-30b-fp8
+  template:
+    metadata:
+      labels:
+        app: vllm-ray-qwen3-30b-fp8
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: default
+      containers:
+        - name: vllm-ray
+          image: vllm/vllm-openai:latest
+          imagePullPolicy: IfNotPresent
+
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HUGGING_FACE_HUB_TOKEN
+            - name: VLLM_LOGGING_LEVEL
+              value: INFO
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: RAY_ADDRESS
+              value: ray://raycluster-kuberay-head-svc:10001
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_PUBLIC_KEY } }
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_SECRET_KEY } }
+            - name: LANGFUSE_HOST
+              valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_HOST } }
+            - name: VLLM_TRACING
+              value: "1"
+          args:
+            - "--model=Qwen/Qwen3-30B-A3B-Thinking-2507-FP8"
+            - "--tensor-parallel-size=16"          # total GPUs across cluster
+            - "--pipeline-parallel-size=1"
+            - "--distributed-executor-backend=ray"
+            - "--max-model-len=4096"
+            - "--served-model-name=qwen3-30b-fp8"
+            - "--trust-remote-code"
+            - "--gpu-memory-utilization=0.92"
+            - "--log-level=INFO"
+            - "--max-num-seqs=64"
+            - "--max-num-batched-tokens=32768"
+            - "--enable-chunked-prefill"
+            - "--metrics-port=8000"
+            - "--host=0.0.0.0"
+            - "--port=8080"
+          ports:
+            - containerPort: 8080
+            - containerPort: 8000
+          resources:
+            limits:
+              cpu: "8"
+              memory: 32Gi
+            requests:
+              cpu: "4"
+              memory: 16Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hf-model-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-ray-qwen3-30b-fp8
+  labels:
+    app: vllm-ray-qwen3-30b-fp8
+spec:
+  selector:
+    app: vllm-ray-qwen3-30b-fp8
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+

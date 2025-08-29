@@ -1,0 +1,152 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: vllm-qwen3-30b-fp8
+  labels:
+    app: vllm-qwen3-30b-fp8
+    component: inference
+  annotations:
+    # Prometheus scraping (if using kube-prometheus-stack)
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  predictor:
+    # Using a custom container for vLLM OpenAI-compatible server
+    # You can also use the KServe vLLM runtime if available in your cluster.
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8000 # Prometheus metrics
+          - containerPort: 8080 # HTTP server (Knative expects 8080)
+        env:
+          - name: HUGGING_FACE_HUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HUGGING_FACE_HUB_TOKEN
+          - name: VLLM_LOGGING_LEVEL
+            value: INFO
+          - name: LANGFUSE_PUBLIC_KEY
+            valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_PUBLIC_KEY } }
+          - name: LANGFUSE_SECRET_KEY
+            valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_SECRET_KEY } }
+          - name: LANGFUSE_HOST
+            valueFrom: { secretKeyRef: { name: langfuse-secrets, key: LANGFUSE_HOST } }
+          - name: VLLM_TRACING
+            value: "1"
+          - name: NCCL_DEBUG
+            value: WARN
+          - name: NCCL_IB_DISABLE
+            value: "0"
+          - name: NCCL_P2P_DISABLE
+            value: "0"
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: all
+        args:
+          - "--model=Qwen/Qwen3-30B-A3B-Thinking-2507-FP8"
+          - "--tensor-parallel-size=8"           # 8 GPUs on a single node
+          - "--pipeline-parallel-size=1"
+          - "--max-model-len=4096"
+          - "--served-model-name=qwen3-30b-fp8"
+          - "--trust-remote-code"
+          - "--gpu-memory-utilization=0.92"
+          - "--log-level=INFO"
+          - "--max-num-seqs=64"
+          - "--max-num-batched-tokens=32768"
+          - "--enable-chunked-prefill"
+          - "--metrics-port=8000"
+          - "--host=0.0.0.0"
+          - "--port=8080"
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+            cpu: "16"
+            memory: 96Gi
+            ephemeral-storage: 100Gi
+          requests:
+            nvidia.com/gpu: 8
+            cpu: "8"
+            memory: 64Gi
+            ephemeral-storage: 60Gi
+        volumeMounts:
+          - name: hf-cache
+            mountPath: /root/.cache/huggingface
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 6
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 30
+    minReplicas: 2  # One per node for 2 nodes
+    maxReplicas: 2
+    nodeSelector:
+      kubernetes.io/arch: amd64
+      # Adjust to your cluster's H100 label
+      nvidia.com/gpu.product: NVIDIA-H100
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: nvidia.com/gpu.product
+                  operator: In
+                  values: ["NVIDIA-H100"]
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: ["vllm-qwen3-30b-fp8"]
+              topologyKey: kubernetes.io/hostname
+    timeout: 600
+    volumes:
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: hf-model-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen3-30b-fp8-metrics
+  labels:
+    app: vllm-qwen3-30b-fp8
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    serving.kserve.io/inferenceservice: vllm-qwen3-30b-fp8
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+

@@ -1,0 +1,103 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-kuberay
+  labels:
+    app.kubernetes.io/name: ray
+    app.kubernetes.io/part-of: vllm-qwen3-30b-fp8
+spec:
+  enableInTreeAutoscaling: false
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-cpus: "8"
+    template:
+      metadata:
+        labels:
+          rayCluster: raycluster-kuberay
+          role: head
+      spec:
+        serviceAccountName: default
+        nodeSelector:
+          kubernetes.io/arch: amd64
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+        containers:
+          - name: ray-head
+            image: rayproject/ray:2.30.0-py310
+            imagePullPolicy: IfNotPresent
+            ports:
+              - containerPort: 8265   # dashboard
+              - containerPort: 10001  # ray client
+            env:
+              - name: RAY_memory_monitor_refresh_ms
+                value: "0"
+            resources:
+              requests:
+                cpu: "4"
+                memory: 8Gi
+              limits:
+                cpu: "8"
+                memory: 16Gi
+  workerGroupSpecs:
+    - groupName: workers
+      replicas: 2  # 2 nodes
+      minReplicas: 2
+      maxReplicas: 2
+      rayStartParams:
+        num-cpus: "8"
+        num-gpus: "8"
+      template:
+        metadata:
+          labels:
+            rayCluster: raycluster-kuberay
+            role: worker
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: amd64
+            nvidia.com/gpu.product: NVIDIA-H100
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: nvidia.com/gpu.product
+                        operator: In
+                        values: ["NVIDIA-H100"]
+          containers:
+            - name: ray-worker
+              image: rayproject/ray:2.30.0-py310
+              imagePullPolicy: IfNotPresent
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  cpu: "16"
+                  memory: 128Gi
+                requests:
+                  nvidia.com/gpu: 8
+                  cpu: "8"
+                  memory: 96Gi
+              env:
+                - name: NVIDIA_VISIBLE_DEVICES
+                  value: all
+                - name: NCCL_DEBUG
+                  value: WARN
+                - name: NCCL_IB_DISABLE
+                  value: "0"
+                - name: NCCL_P2P_DISABLE
+                  value: "0"
+              volumeMounts:
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
+
