@@ -6,6 +6,15 @@ metadata:
     app: llm-training
 data:
   run_qlora.py: |
+    # -*- coding: utf-8 -*-
+    """
+    QLoRA 학습 스크립트(한국어 주석)
+    - 목적: 대형 언어모델을 LoRA/QLoRA로 효율적으로 후처리
+    - 입력: /mnt/datasets/processed (KFP 파이프라인 출력 가정)
+    - 출력: /mnt/checkpoints/qwen3-30b-qlora
+    - Langfuse가 설정되면 학습 로그/저장 이벤트를 관측으로 기록
+    주의: 실제 운영에서는 사용자 데이터 스키마에 맞춘 전처리가 필요합니다.
+    """
     import os, math, json, time
     from dataclasses import dataclass
     from typing import Optional
@@ -23,8 +32,8 @@ data:
       model_name_or_path: str = os.getenv("MODEL_NAME", "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8")
       dataset_dir: str = os.getenv("DATASET_DIR", "/mnt/datasets/processed")
       output_dir: str = os.getenv("OUTPUT_DIR", "/mnt/checkpoints/qwen3-30b-qlora")
-      per_device_train_batch_size: int = int(os.getenv("BATCH", "1"))
-      gradient_accumulation_steps: int = int(os.getenv("GA", "8"))
+      per_device_train_batch_size: int = int(os.getenv("BATCH", "1"))  # GPU당 배치 크기
+      gradient_accumulation_steps: int = int(os.getenv("GA", "8"))      # 누적 스텝(메모리 절약)
       learning_rate: float = float(os.getenv("LR", "1e-4"))
       num_train_epochs: int = int(os.getenv("EPOCHS", "3"))
       max_seq_length: int = int(os.getenv("MAX_LEN", "4096"))
@@ -34,6 +43,7 @@ data:
       deepspeed: Optional[str] = os.getenv("DEEPSPEED", "/workspace/train/configs/ds_qlora.json")
 
     def init_langfuse():
+      """Langfuse 초기화(환경변수 없으면 None)."""
       if Langfuse is None:
         return None
       pub = os.getenv("LANGFUSE_PUBLIC_KEY"); sec = os.getenv("LANGFUSE_SECRET_KEY"); host = os.getenv("LANGFUSE_HOST")
@@ -50,7 +60,7 @@ data:
       ds = load_from_disk(a.dataset_dir)
       tok = AutoTokenizer.from_pretrained(a.model_name_or_path, trust_remote_code=True)
       if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
+        tok.pad_token = tok.eos_token  # 패딩 토큰 지정(없을 경우 EOS로)
       base = AutoModelForCausalLM.from_pretrained(a.model_name_or_path, trust_remote_code=True)
       peft_cfg = LoraConfig(
         task_type=TaskType.CAUSAL_LM, r=64, lora_alpha=16, lora_dropout=0.05,
@@ -60,6 +70,7 @@ data:
       model = get_peft_model(base, peft_cfg)
 
       def format_fn(example):
+        """원시 텍스트를 토큰화하고 Causal LM 레이블을 생성."""
         text = example["text"] if "text" in example else example["input"]
         ids = tok(text, max_length=a.max_seq_length, truncation=True, padding="max_length", return_tensors=None)
         ids["labels"] = ids["input_ids"].copy()
@@ -71,7 +82,7 @@ data:
       lf = init_langfuse()
 
       def compute_metrics(eval_pred):
-        # placeholder; add perplexity if eval set exists
+        # (옵션) 검증셋이 있을 경우 Perplexity 등 계산 추가
         return {}
 
       args = TrainingArguments(
@@ -90,6 +101,7 @@ data:
       )
 
       class LFCallback:
+        """학습 로그/저장을 Langfuse 관측으로 남기는 콜백."""
         def __init__(self, lf): self.lf = lf
         def on_log(self, args, state, control, logs=None, **kwargs):
           if not self.lf or not logs: return
@@ -115,6 +127,13 @@ data:
     if __name__ == "__main__":
       main()
   run_full_finetune.py: |
+    # -*- coding: utf-8 -*-
+    """
+    전체 파인튜닝 스크립트(한국어 주석)
+    - 목적: 어댑터 없이 전체 가중치 업데이트(리소스 요구가 큼)
+    - 입력/출력 경로는 QLoRA 예제와 동일한 패턴을 따릅니다.
+    - Langfuse로 기본 로그를 남깁니다.
+    """
     import os
     from datasets import load_from_disk
     from transformers import (AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments)
