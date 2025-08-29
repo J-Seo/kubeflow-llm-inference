@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tensorboard-llm
+  labels:
+    app: tensorboard-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tensorboard-llm
+  template:
+    metadata:
+      labels:
+        app: tensorboard-llm
+    spec:
+      containers:
+        - name: tensorboard
+          image: tensorflow/tensorflow:2.15.0
+          command: ["bash", "-lc", "pip install tensorboard && tensorboard --logdir /mnt/checkpoints --host 0.0.0.0 --port 6006"]
+          ports:
+            - containerPort: 6006
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /mnt/checkpoints
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: llm-checkpoints-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tensorboard-llm
+spec:
+  selector:
+    app: tensorboard-llm
+  ports:
+    - name: http
+      port: 80
+      targetPort: 6006
+  type: ClusterIP
+

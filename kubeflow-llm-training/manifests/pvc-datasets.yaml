@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llm-datasets-pvc
+  labels:
+    app.kubernetes.io/name: llm-training
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 5Ti
+  storageClassName: nfs-client # Replace with your RWX storage class
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llm-checkpoints-pvc
+  labels:
+    app.kubernetes.io/name: llm-training
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 10Ti
+  storageClassName: nfs-client # Replace with your RWX storage class
+

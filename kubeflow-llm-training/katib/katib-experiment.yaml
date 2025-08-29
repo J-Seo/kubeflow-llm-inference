@@ -1,0 +1,49 @@
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: qwen3-30b-qlora-katib
+spec:
+  objective:
+    type: maximize
+    goal: 0.0
+    objectiveMetricName: eval_accuracy
+  algorithm:
+    algorithmName: random
+  parameters:
+    - name: --learning_rate
+      parameterType: double
+      feasibleSpace:
+        min: "1e-5"
+        max: "5e-4"
+    - name: --gradient_accumulation_steps
+      parameterType: int
+      feasibleSpace:
+        min: "4"
+        max: "16"
+  trialTemplate:
+    primaryContainerName: training-container
+    trialParameters:
+      - name: learningRate
+        description: Learning rate
+        reference: --learning_rate
+      - name: gaSteps
+        description: Grad accumulation
+        reference: --gradient_accumulation_steps
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: training-container
+                image: nvcr.io/nvidia/pytorch:24.07-py3
+                command: ["bash","-lc"]
+                args:
+                  - >-
+                    pip install -U transformers datasets peft deepspeed accelerate &&
+                    python - <<'PY'
+                    print("This is a placeholder for a single-node eval job.")
+                    PY
+

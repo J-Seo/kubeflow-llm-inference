@@ -1,0 +1,205 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: train-scripts
+  labels:
+    app: llm-training
+data:
+  run_qlora.py: |
+    import os, math, json, time
+    from dataclasses import dataclass
+    from typing import Optional
+    from datasets import load_from_disk
+    from transformers import (AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments)
+    from transformers.trainer_utils import get_last_checkpoint
+    from peft import LoraConfig, get_peft_model, TaskType
+    try:
+      from langfuse import Langfuse
+    except Exception:
+      Langfuse = None
+
+    @dataclass
+    class Args:
+      model_name_or_path: str = os.getenv("MODEL_NAME", "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8")
+      dataset_dir: str = os.getenv("DATASET_DIR", "/mnt/datasets/processed")
+      output_dir: str = os.getenv("OUTPUT_DIR", "/mnt/checkpoints/qwen3-30b-qlora")
+      per_device_train_batch_size: int = int(os.getenv("BATCH", "1"))
+      gradient_accumulation_steps: int = int(os.getenv("GA", "8"))
+      learning_rate: float = float(os.getenv("LR", "1e-4"))
+      num_train_epochs: int = int(os.getenv("EPOCHS", "3"))
+      max_seq_length: int = int(os.getenv("MAX_LEN", "4096"))
+      logging_steps: int = int(os.getenv("LOG_STEPS", "10"))
+      save_steps: int = int(os.getenv("SAVE_STEPS", "1000"))
+      save_total_limit: int = int(os.getenv("SAVE_LIMIT", "5"))
+      deepspeed: Optional[str] = os.getenv("DEEPSPEED", "/workspace/train/configs/ds_qlora.json")
+
+    def init_langfuse():
+      if Langfuse is None:
+        return None
+      pub = os.getenv("LANGFUSE_PUBLIC_KEY"); sec = os.getenv("LANGFUSE_SECRET_KEY"); host = os.getenv("LANGFUSE_HOST")
+      if not pub or not sec or not host:
+        return None
+      try:
+        return Langfuse(public_key=pub, secret_key=sec, host=host)
+      except Exception:
+        return None
+
+    def main():
+      a = Args()
+      os.makedirs(a.output_dir, exist_ok=True)
+      ds = load_from_disk(a.dataset_dir)
+      tok = AutoTokenizer.from_pretrained(a.model_name_or_path, trust_remote_code=True)
+      if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+      base = AutoModelForCausalLM.from_pretrained(a.model_name_or_path, trust_remote_code=True)
+      peft_cfg = LoraConfig(
+        task_type=TaskType.CAUSAL_LM, r=64, lora_alpha=16, lora_dropout=0.05,
+        target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+        bias="none"
+      )
+      model = get_peft_model(base, peft_cfg)
+
+      def format_fn(example):
+        text = example["text"] if "text" in example else example["input"]
+        ids = tok(text, max_length=a.max_seq_length, truncation=True, padding="max_length", return_tensors=None)
+        ids["labels"] = ids["input_ids"].copy()
+        return ids
+
+      train_ds = ds["train"].map(format_fn, remove_columns=ds["train"].column_names)
+
+      last_ckpt = get_last_checkpoint(a.output_dir)
+      lf = init_langfuse()
+
+      def compute_metrics(eval_pred):
+        # placeholder; add perplexity if eval set exists
+        return {}
+
+      args = TrainingArguments(
+        output_dir=a.output_dir,
+        per_device_train_batch_size=a.per_device_train_batch_size,
+        gradient_accumulation_steps=a.gradient_accumulation_steps,
+        learning_rate=a.learning_rate,
+        num_train_epochs=a.num_train_epochs,
+        logging_steps=a.logging_steps,
+        save_steps=a.save_steps,
+        save_total_limit=a.save_total_limit,
+        bf16=True,
+        deepspeed=a.deepspeed,
+        report_to=["tensorboard"],
+        logging_dir=os.path.join(a.output_dir, "tb"),
+      )
+
+      class LFCallback:
+        def __init__(self, lf): self.lf = lf
+        def on_log(self, args, state, control, logs=None, **kwargs):
+          if not self.lf or not logs: return
+          o = self.lf.observation(name="train.log", metadata={"step": int(state.global_step)})
+          o.update(output=logs); o.end()
+        def on_save(self, args, state, control, **kwargs):
+          if not self.lf: return
+          o = self.lf.observation(name="train.save", metadata={"step": int(state.global_step)})
+          o.end()
+
+      trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=train_ds,
+        tokenizer=tok,
+        compute_metrics=compute_metrics,
+        callbacks=[LFCallback(lf)] if lf else None,
+      )
+
+      trainer.train(resume_from_checkpoint=last_ckpt)
+      trainer.save_model(a.output_dir)
+
+    if __name__ == "__main__":
+      main()
+  run_full_finetune.py: |
+    import os
+    from datasets import load_from_disk
+    from transformers import (AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments)
+    from transformers.trainer_utils import get_last_checkpoint
+    try:
+      from langfuse import Langfuse
+    except Exception:
+      Langfuse = None
+
+    def init_langfuse():
+      if Langfuse is None: return None
+      try:
+        return Langfuse(public_key=os.getenv("LANGFUSE_PUBLIC_KEY"), secret_key=os.getenv("LANGFUSE_SECRET_KEY"), host=os.getenv("LANGFUSE_HOST"))
+      except Exception:
+        return None
+
+    def main():
+      model_name = os.getenv("MODEL_NAME", "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8")
+      dataset_dir = os.getenv("DATASET_DIR", "/mnt/datasets/processed")
+      output_dir = os.getenv("OUTPUT_DIR", "/mnt/checkpoints/qwen3-30b-fullft")
+      per_device = int(os.getenv("BATCH", "1"))
+      ga = int(os.getenv("GA", "4"))
+      lr = float(os.getenv("LR", "5e-5"))
+      epochs = int(os.getenv("EPOCHS", "2"))
+      max_len = int(os.getenv("MAX_LEN", "4096"))
+      deepspeed = os.getenv("DEEPSPEED", "/workspace/train/configs/ds_full.json")
+      os.makedirs(output_dir, exist_ok=True)
+      ds = load_from_disk(dataset_dir)
+      tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+      if tok.pad_token is None: tok.pad_token = tok.eos_token
+      model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+
+      def format_fn(example):
+        text = example.get("text") or example.get("input")
+        enc = tok(text, max_length=max_len, truncation=True, padding="max_length")
+        enc["labels"] = enc["input_ids"].copy()
+        return enc
+
+      train_ds = ds["train"].map(format_fn, remove_columns=ds["train"].column_names)
+      last_ckpt = get_last_checkpoint(output_dir)
+      lf = init_langfuse()
+
+      class LFCallback:
+        def __init__(self, lf): self.lf = lf
+        def on_log(self, args, state, control, logs=None, **kwargs):
+          if not self.lf or not logs: return
+          o = self.lf.observation(name="train.log", metadata={"step": int(state.global_step)})
+          o.update(output=logs); o.end()
+
+      args = TrainingArguments(
+        output_dir=output_dir,
+        per_device_train_batch_size=per_device,
+        gradient_accumulation_steps=ga,
+        learning_rate=lr,
+        num_train_epochs=epochs,
+        logging_steps=10,
+        save_steps=500,
+        bf16=True,
+        deepspeed=deepspeed,
+        report_to=["tensorboard"],
+        logging_dir=os.path.join(output_dir, "tb"),
+      )
+
+      trainer = Trainer(model=model, args=args, train_dataset=train_ds, tokenizer=tok, callbacks=[LFCallback(lf)] if lf else None)
+      trainer.train(resume_from_checkpoint=last_ckpt)
+      trainer.save_model(output_dir)
+
+    if __name__ == "__main__":
+      main()
+  ds_qlora.json: |
+    {
+      "train_micro_batch_size_per_gpu": 1,
+      "gradient_accumulation_steps": 8,
+      "bf16": {"enabled": true},
+      "zero_optimization": {"stage": 2, "overlap_comm": true},
+      "steps_per_print": 100,
+      "wall_clock_breakdown": false
+    }
+  ds_full.json: |
+    {
+      "train_micro_batch_size_per_gpu": 1,
+      "gradient_accumulation_steps": 4,
+      "bf16": {"enabled": true},
+      "zero_optimization": {"stage": 2, "overlap_comm": true},
+      "steps_per_print": 100,
+      "wall_clock_breakdown": false
+    }
+
